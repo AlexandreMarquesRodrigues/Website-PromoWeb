@@ -1,0 +1,18 @@
+{
+  "name": "promoweb-backend",
+  "version": "1.0.0",
+  "description": "Backend do PromoWeb, um agregador de promoções de jogos digitais.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": [
+    "promocoes",
+    "jogos",
+    "steam"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}
