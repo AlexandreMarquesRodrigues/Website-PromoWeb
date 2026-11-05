@@ -1,62 +1,26 @@
-# PromoWeb
 
-Agregador de promoções de jogos digitais. O backend consulta a API pública da Steam, converte os preços para BRL e entrega os dados em JSON para o frontend exibir os cards.
+# 🛍️ PromoWeb
 
-## Como rodar
+**Encontre oportunidades, descubra ofertas e aproveite o melhor da internet!**
 
-Requisitos: Node.js 18 ou superior (o projeto usa o `fetch` nativo do Node).
+O **PromoWeb** é um projeto desenvolvido com o objetivo de reunir promoções e ofertas de diferentes produtos em um único lugar, facilitando a busca por preços interessantes e oportunidades de economia.
 
-```bash
-cd backend
-npm start
-```
+A proposta é oferecer uma plataforma simples, intuitiva e acessível, onde os usuários possam explorar ofertas, descobrir produtos e encontrar boas oportunidades de compra sem precisar navegar por diversos sites.
 
-Depois abra no navegador:
+## 🎯 Objetivo
 
-- Site: http://localhost:3000
-- Rota de teste: http://localhost:3000/api/teste
-- Promoções da Steam: http://localhost:3000/api/steam
+Desenvolver uma plataforma de divulgação de promoções que facilite o acesso a ofertas e proporcione uma experiência de navegação prática e agradável.
 
-Para desenvolver com reinício automático ao salvar arquivos:
+## 🛠️ Tecnologias
 
-```bash
-npm run dev
-```
+Projeto em desenvolvimento. As tecnologias e funcionalidades serão apresentadas conforme sua implementação evoluir.
 
-## Estrutura
+## 🚧 Status do projeto
 
-```
-PromoWeb/
-├── frontend/
-│   ├── index.html
-│   ├── style.css
-│   └── script.js
-└── backend/
-    ├── server.js
-    └── package.json
-```
+<text>Em desenvolvimento.</text>
 
-## Como funciona
+O PromoWeb está sendo construído gradualmente, com foco na implementação de suas funcionalidades, integração entre frontend e backend e aprimoramento da experiência do usuário.
 
-1. O navegador acessa `http://localhost:3000`.
-2. O `server.js` serve os arquivos da pasta `frontend`.
-3. O `script.js` chama `/api/steam`.
-4. O backend consulta `store.steampowered.com`, converte os preços de centavos para reais e devolve JSON.
-5. O frontend monta os cards com capa, desconto, preço original, preço promocional e link para a loja.
+---
 
-O backend guarda a resposta da Steam em cache por 10 minutos para não estourar o limite de requisições da API.
-
-## Rotas
-
-| Rota | Descrição |
-| --- | --- |
-| `GET /api/teste` | Confirma que o backend está respondendo JSON |
-| `GET /api/steam` | Lista as promoções da Steam em BRL |
-
-## Próximos passos
-
-- Integrar a Epic Games.
-- Estudar APIs de afiliados das demais lojas (Nuuvem, Eneba, Instant Gaming, G2A e Thunder Keys) — elas não possuem uma API pública simples como a da Steam.
-- Criar o banco no Supabase (PostgreSQL) e a autenticação com Supabase Auth.
-- Implementar wishlist, favoritos e alertas de promoção.
-- Adicionar painel de administração para usuários autorizados.
+**PromoWeb — Boas ofertas, melhores escolhas.**
