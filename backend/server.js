@@ -24,6 +24,14 @@ let cacheEpic = {
     horario: 0
 };
 
+// API pública de câmbio. Usamos para converter os preços da Epic (USD) em reais.
+const URL_CAMBIO = "https://economia.awesomeapi.com.br/json/last/USD-BRL";
+const CACHE_CAMBIO_MS = 60 * 60 * 1000;
+let cacheCambio = {
+    taxa: null,
+    horario: 0
+};
+
 const TIPOS_ARQUIVO = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
@@ -122,18 +130,25 @@ async function buscarPromocoesSteam() {
 }
 
 // Converte uma oferta da CheapShark para o mesmo formato usado pela Steam.
-function converterJogoEpic(deal) {
-    const precoOriginal = Number(deal.normalPrice);
-    const precoFinal = Number(deal.salePrice);
+function converterJogoEpic(deal, taxaDolar) {
+    const precoOriginalUSD = Number(deal.normalPrice);
+    const precoFinalUSD = Number(deal.salePrice);
+
+    // Multiplica o valor em dólar pela cotação e arredonda para 2 casas decimais.
+    const precoOriginal = Number((precoOriginalUSD * taxaDolar).toFixed(2));
+    const precoFinal = Number((precoFinalUSD * taxaDolar).toFixed(2));
 
     return {
         id: deal.gameID,
         nome: deal.title,
         desconto: Math.round(Number(deal.savings)),
-        // A CheapShark devolve os preços em dólar (USD), não em centavos.
         precoOriginal: precoOriginal,
         precoFinal: precoFinal,
-        moeda: "USD",
+        // Guardamos também o valor original em dólar para conferência.
+        precoOriginalUSD: precoOriginalUSD,
+        precoFinalUSD: precoFinalUSD,
+        moeda: "BRL",
+        precoAproximado: true,
         // Se o jogo existir na Steam, usamos uma imagem maior; senão, a imagem da CheapShark.
         imagem: deal.steamAppID
             ? `https://cdn.cloudflare.steamstatic.com/steam/apps/${deal.steamAppID}/header.jpg`
@@ -141,6 +156,46 @@ function converterJogoEpic(deal) {
         link: `https://www.cheapshark.com/redirect?dealID=${deal.dealID}`,
         expiraEm: null
     };
+}
+
+async function obterCotacaoDolar() {
+    const agora = Date.now();
+
+    // A cotação muda pouco durante o dia, então guardamos por 1 hora.
+    if (cacheCambio.taxa && agora - cacheCambio.horario < CACHE_CAMBIO_MS) {
+        return cacheCambio.taxa;
+    }
+
+    try {
+        const resposta = await fetch(URL_CAMBIO, {
+            headers: {
+                "Accept": "application/json",
+                "User-Agent": "PromoWeb/1.0 (projeto de estudo)"
+            }
+        });
+
+        if (!resposta.ok) {
+            throw new Error(`A API de câmbio respondeu com o status ${resposta.status}.`);
+        }
+
+        const dados = await resposta.json();
+        const taxa = Number(dados?.USDBRL?.bid);
+
+        if (!Number.isFinite(taxa) || taxa <= 0) {
+            throw new Error("Cotação do dólar inválida.");
+        }
+
+        cacheCambio = { taxa: taxa, horario: agora };
+        return taxa;
+    } catch (erro) {
+        // Se já temos uma cotação antiga, usamos ela em vez de derrubar a rota.
+        if (cacheCambio.taxa) {
+            console.error("Usando cotação antiga do dólar:", erro.message);
+            return cacheCambio.taxa;
+        }
+
+        throw erro;
+    }
 }
 
 async function buscarPromocoesEpic() {
@@ -163,6 +218,7 @@ async function buscarPromocoesEpic() {
     }
 
     const ofertas = await resposta.json();
+    const taxaDolar = await obterCotacaoDolar();
 
     const jogos = ofertas
         .filter(function (deal) {
@@ -175,12 +231,16 @@ async function buscarPromocoesEpic() {
         .sort(function (a, b) {
             return Number(b.dealRating) - Number(a.dealRating);
         })
-        .map(converterJogoEpic);
+        .map(function (deal) {
+            return converterJogoEpic(deal, taxaDolar);
+        });
 
     cacheEpic = {
         dados: {
             loja: "Epic Games",
-            moeda: "USD",
+            moeda: "BRL",
+            precoAproximado: true,
+            cotacaoDolar: taxaDolar,
             atualizadoEm: new Date().toISOString(),
             total: jogos.length,
             jogos: jogos
