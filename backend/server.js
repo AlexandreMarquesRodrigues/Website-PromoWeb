@@ -24,8 +24,31 @@ let cacheEpic = {
     horario: 0
 };
 
-// API pública de câmbio. Usamos para converter os preços da Epic (USD) em reais.
-const URL_CAMBIO = "https://economia.awesomeapi.com.br/json/last/USD-BRL";
+// APIs públicas de câmbio. Tentamos na ordem; se uma falhar, usamos a próxima.
+// A AwesomeAPI às vezes responde 429 (limite de requisições) em servidores na nuvem.
+const FONTES_CAMBIO = [
+    {
+        nome: "AwesomeAPI",
+        url: "https://economia.awesomeapi.com.br/json/last/USD-BRL",
+        extrair: function (dados) {
+            return Number(dados?.USDBRL?.bid);
+        }
+    },
+    {
+        nome: "Frankfurter",
+        url: "https://api.frankfurter.app/latest?from=USD&to=BRL",
+        extrair: function (dados) {
+            return Number(dados?.rates?.BRL);
+        }
+    },
+    {
+        nome: "Open ER API",
+        url: "https://open.er-api.com/v6/latest/USD",
+        extrair: function (dados) {
+            return Number(dados?.rates?.BRL);
+        }
+    }
+];
 const CACHE_CAMBIO_MS = 60 * 60 * 1000;
 let cacheCambio = {
     taxa: null,
@@ -166,36 +189,49 @@ async function obterCotacaoDolar() {
         return cacheCambio.taxa;
     }
 
-    try {
-        const resposta = await fetch(URL_CAMBIO, {
-            headers: {
-                "Accept": "application/json",
-                "User-Agent": "PromoWeb/1.0 (projeto de estudo)"
+    let ultimoErro = null;
+
+    // Tenta cada fonte de câmbio em ordem. Se uma falhar, passa para a próxima.
+    for (const fonte of FONTES_CAMBIO) {
+        try {
+            const resposta = await fetch(fonte.url, {
+                headers: {
+                    "Accept": "application/json",
+                    "User-Agent": "PromoWeb/1.0 (projeto de estudo)"
+                },
+                signal: AbortSignal.timeout(8000)
+            });
+
+            if (!resposta.ok) {
+                throw new Error(`${fonte.nome} respondeu com o status ${resposta.status}.`);
             }
-        });
 
-        if (!resposta.ok) {
-            throw new Error(`A API de câmbio respondeu com o status ${resposta.status}.`);
+            const dados = await resposta.json();
+            const taxa = fonte.extrair(dados);
+
+            if (!Number.isFinite(taxa) || taxa <= 0) {
+                throw new Error(`${fonte.nome} devolveu uma cotação inválida.`);
+            }
+
+            cacheCambio = { taxa: taxa, horario: agora };
+            console.log(`Cotação do dólar obtida em ${fonte.nome}: R$ ${taxa}`);
+            return taxa;
+        } catch (erro) {
+            ultimoErro = erro;
+            console.error(`Falha ao buscar cotação em ${fonte.nome}:`, erro.message);
         }
-
-        const dados = await resposta.json();
-        const taxa = Number(dados?.USDBRL?.bid);
-
-        if (!Number.isFinite(taxa) || taxa <= 0) {
-            throw new Error("Cotação do dólar inválida.");
-        }
-
-        cacheCambio = { taxa: taxa, horario: agora };
-        return taxa;
-    } catch (erro) {
-        // Se já temos uma cotação antiga, usamos ela em vez de derrubar a rota.
-        if (cacheCambio.taxa) {
-            console.error("Usando cotação antiga do dólar:", erro.message);
-            return cacheCambio.taxa;
-        }
-
-        throw erro;
     }
+
+    // Se nenhuma fonte funcionar, usa a última cotação conhecida.
+    if (cacheCambio.taxa) {
+        console.error("Usando cotação antiga do dólar:", ultimoErro.message);
+        return cacheCambio.taxa;
+    }
+
+    // Último recurso para a seção Epic não ficar vazia.
+    const taxaEmergencia = 5.50;
+    console.error("Usando cotação de emergência:", ultimoErro.message);
+    return taxaEmergencia;
 }
 
 async function buscarPromocoesEpic() {
