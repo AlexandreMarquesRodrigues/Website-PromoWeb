@@ -8,6 +8,11 @@ const formatadorDolar = new Intl.NumberFormat("pt-BR", {
     currency: "USD"
 });
 
+// No computador usamos o backend local. No Vercel, usamos o backend do Render.
+const API_URL = location.hostname === "localhost" || location.hostname === "127.0.0.1"
+    ? ""
+    : "https://website-promoweb.onrender.com";
+
 const lojas = [
     {
         nome: "Steam",
@@ -91,7 +96,7 @@ async function carregarPromocoes(loja) {
     loja.lista.replaceChildren();
 
     try {
-        const resposta = await fetch(`/api/${loja.rota}`);
+        const resposta = await fetch(`${API_URL}/api/${loja.rota}`);
 
         // Se o backend devolver um erro em JSON, aproveitamos a mensagem dele.
         const dados = await resposta.json().catch(function () {
