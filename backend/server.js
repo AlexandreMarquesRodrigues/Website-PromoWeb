@@ -24,6 +24,40 @@ let cacheEpic = {
     horario: 0
 };
 
+// A Nuuvem não tem uma API pública documentada para o catálogo.
+// Por isso lemos a página de promoções, que já vem com os produtos em HTML.
+const URL_NUUVEM = "https://www.nuuvem.com/br-pt/catalog/platforms/pc/price/promo/sort/bestselling/sort-mode/desc";
+const CACHE_NUUVEM_MS = 10 * 60 * 1000;
+let cacheNuuvem = {
+    dados: null,
+    horario: 0
+};
+
+// A Eneba usa o Algolia na busca do próprio site. Esta é a chave pública
+// que o frontend da Eneba utiliza; ela só permite consultar os índices.
+const APP_ID_ENEBA = "IHJZQ5LW2R";
+const CHAVE_ENEBA = "53864095e814940ffed0f69a897331f1";
+const URL_ENEBA = `https://${APP_ID_ENEBA}-dsn.algolia.net/1/indexes/products_br/query`;
+const CACHE_ENEBA_MS = 10 * 60 * 1000;
+let cacheEneba = {
+    dados: null,
+    horario: 0
+};
+
+// A Instant Gaming monta a página "Ofertas do dia" no servidor, já com os
+// preços finais em BRL. Para recuperar o preço original em BRL, usamos o
+// índice público do Algolia que o próprio site consulta.
+const URL_INSTANT_GAMING = "https://www.instant-gaming.com/br/ofertas-do-dia/";
+const URL_REFERER_INSTANT_GAMING = "https://www.instant-gaming.com/br/";
+const APP_ID_INSTANT_GAMING = "QKNHP8TC3Y";
+const CHAVE_INSTANT_GAMING = "93946b91c013211f842ddf1819ea880b";
+const URL_ALGOLIA_INSTANT_GAMING = `https://${APP_ID_INSTANT_GAMING}-dsn.algolia.net/1/indexes/*/objects`;
+const CACHE_INSTANT_GAMING_MS = 10 * 60 * 1000;
+let cacheInstantGaming = {
+    dados: null,
+    horario: 0
+};
+
 // APIs públicas de câmbio. Tentamos na ordem; se uma falhar, usamos a próxima.
 // A AwesomeAPI às vezes responde 429 (limite de requisições) em servidores na nuvem.
 const FONTES_CAMBIO = [
@@ -172,10 +206,14 @@ function converterJogoEpic(deal, taxaDolar) {
         precoFinalUSD: precoFinalUSD,
         moeda: "BRL",
         precoAproximado: true,
-        // Se o jogo existir na Steam, usamos uma imagem maior; senão, a imagem da CheapShark.
+        // O capsule 616x353 tem a mesma proporção dos cards (616/353).
+        // Se ele não existir, o frontend troca pelo header.jpg.
         imagem: deal.steamAppID
-            ? `https://cdn.cloudflare.steamstatic.com/steam/apps/${deal.steamAppID}/header.jpg`
+            ? `https://cdn.cloudflare.steamstatic.com/steam/apps/${deal.steamAppID}/capsule_616x353.jpg`
             : deal.thumb,
+        imagemAlternativa: deal.steamAppID
+            ? `https://cdn.cloudflare.steamstatic.com/steam/apps/${deal.steamAppID}/header.jpg`
+            : null,
         link: `https://www.cheapshark.com/redirect?dealID=${deal.dealID}`,
         expiraEm: null
     };
@@ -287,6 +325,422 @@ async function buscarPromocoesEpic() {
     return { ...cacheEpic.dados, cache: false };
 }
 
+// A página da Nuuvem vem com os dados do produto dentro de atributos HTML.
+// Esta função desfaz as entidades para conseguirmos ler o JSON.
+function decodificarEntidadesHTML(texto) {
+    return String(texto)
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&nbsp;/g, " ")
+        .replace(/&amp;/g, "&");
+}
+
+function lerPrecoNuuvem(atributo) {
+    if (!atributo) {
+        return null;
+    }
+
+    try {
+        const dados = JSON.parse(decodificarEntidadesHTML(atributo));
+        const valor = Number(dados.v);
+
+        // A Nuuvem guarda o preço em centavos: 21999 -> R$ 219,99
+        return Number.isFinite(valor) ? valor / 100 : null;
+    } catch (erro) {
+        return null;
+    }
+}
+
+function converterJogoNuuvem(card) {
+    const atributoDados = card.match(/data-wishlist-button-product-data-value="([^"]*)"/);
+    let dados = null;
+
+    if (atributoDados) {
+        try {
+            dados = JSON.parse(decodificarEntidadesHTML(atributoDados[1]));
+        } catch (erro) {
+            dados = null;
+        }
+    }
+
+    const precoOriginal = lerPrecoNuuvem(card.match(/data-base-price="([^"]*)"/)?.[1]);
+    const precoFinal = lerPrecoNuuvem(card.match(/data-price="([^"]*)"/)?.[1]);
+
+    if (!dados || !dados.name || !dados.url || !precoOriginal || !precoFinal || precoFinal >= precoOriginal) {
+        return null;
+    }
+
+    const imagem = card.match(/<img[^>]+class="[^"]*game-cover__item[^"]*"[^>]*src="([^"]+)"/);
+    const banner = card.match(/data-banner="([^"]+)"/)?.[1];
+    const id = card.match(/data-product-id="([^"]+)"/)?.[1] || dados.id;
+
+    return {
+        id: id,
+        nome: dados.name,
+        desconto: Math.round((1 - precoFinal / precoOriginal) * 100),
+        precoOriginal: precoOriginal,
+        precoFinal: precoFinal,
+        moeda: "BRL",
+        imagem: imagem
+            ? (imagem[1].startsWith("//") ? `https:${imagem[1]}` : imagem[1])
+            : banner
+                ? `https://assets.nuuvem.com/image/upload/t_banner_big/v1/${banner}`
+                : dados.image_url,
+        link: dados.url,
+        expiraEm: null
+    };
+}
+
+function extrairJogosNuuvem(html) {
+    const cards = html.match(/<article[^>]*data-component="product-card"[^>]*>[\s\S]*?<\/article>/g) || [];
+
+    return cards
+        .map(converterJogoNuuvem)
+        .filter(function (jogo) {
+            return jogo !== null;
+        });
+}
+
+async function buscarPromocoesNuuvem() {
+    const agora = Date.now();
+
+    if (cacheNuuvem.dados && agora - cacheNuuvem.horario < CACHE_NUUVEM_MS) {
+        return { ...cacheNuuvem.dados, cache: true };
+    }
+
+    const resposta = await fetch(URL_NUUVEM, {
+        headers: {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+            // A Nuuvem pode bloquear requisições sem um navegador identificado.
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        }
+    });
+
+    if (!resposta.ok) {
+        throw new Error(`A Nuuvem respondeu com o status ${resposta.status}.`);
+    }
+
+    const html = await resposta.text();
+    const jogos = extrairJogosNuuvem(html);
+
+    if (jogos.length === 0) {
+        throw new Error("Nenhuma promoção da Nuuvem foi encontrada na página.");
+    }
+
+    cacheNuuvem = {
+        dados: {
+            loja: "Nuuvem",
+            moeda: "BRL",
+            atualizadoEm: new Date().toISOString(),
+            total: jogos.length,
+            jogos: jogos
+        },
+        horario: agora
+    };
+
+    return { ...cacheNuuvem.dados, cache: false };
+}
+
+// A Eneba é um marketplace de chaves. A busca pública devolve os produtos
+// em centavos de BRL e com a imagem em formato retrato.
+function converterJogoEneba(hit) {
+    const nome = hit.translations?.pt_BR?.name || hit.translations?.en_US?.name;
+    const precoOriginal = Number(hit.msrp?.BRL) / 100;
+    const precoFinal = Number(hit.lowestPrice?.BRL) / 100;
+    const drm = String(hit.drmName || "").toLowerCase();
+    const regioes = Array.isArray(hit.productRegions) ? hit.productRegions : [];
+    const regiaoValida = regioes.some(function (regiao) {
+        return ["global", "latam", "brazil", "row"].includes(regiao);
+    });
+
+    if (!nome || !hit.slug) {
+        return null;
+    }
+
+    if (!Number.isFinite(precoOriginal) || !Number.isFinite(precoFinal)) {
+        return null;
+    }
+
+    if (precoOriginal <= 0 || precoFinal <= 0 || precoFinal >= precoOriginal) {
+        return null;
+    }
+
+    // Evita chaves aleatórias e produtos de regiões que não ativam no Brasil.
+    if (drm.includes("random") || !regiaoValida) {
+        return null;
+    }
+
+    const imagem = hit.images?.cover300?.src2x || hit.images?.cover300?.src;
+
+    if (!imagem) {
+        return null;
+    }
+
+    return {
+        id: hit.objectID,
+        nome: nome,
+        desconto: Math.round((1 - precoFinal / precoOriginal) * 100),
+        precoOriginal: precoOriginal,
+        precoFinal: precoFinal,
+        moeda: "BRL",
+        imagem: imagem,
+        link: `https://www.eneba.com/br/${hit.slug}`,
+        expiraEm: null
+    };
+}
+
+async function buscarPromocoesEneba() {
+    const agora = Date.now();
+
+    if (cacheEneba.dados && agora - cacheEneba.horario < CACHE_ENEBA_MS) {
+        return { ...cacheEneba.dados, cache: true };
+    }
+
+    const resposta = await fetch(URL_ENEBA, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "X-Algolia-Application-Id": APP_ID_ENEBA,
+            "X-Algolia-API-Key": CHAVE_ENEBA
+        },
+        body: JSON.stringify({
+            query: "",
+            hitsPerPage: 200,
+            // Somente jogos com estoque e que não estão bloqueados no Brasil.
+            filters: '(stockAvailable:true) AND (NOT regionBlacklist:"brazil") AND (productType:"game")',
+            attributesToRetrieve: [
+                "slug",
+                "objectID",
+                "translations",
+                "images",
+                "lowestPrice",
+                "msrp",
+                "productRegions",
+                "drmName"
+            ]
+        })
+    });
+
+    if (!resposta.ok) {
+        throw new Error(`A Eneba respondeu com o status ${resposta.status}.`);
+    }
+
+    const dados = await resposta.json();
+    const jogos = (dados.hits || [])
+        .map(converterJogoEneba)
+        .filter(function (jogo) {
+            return jogo !== null;
+        })
+        .slice(0, 24);
+
+    if (jogos.length === 0) {
+        throw new Error("Nenhuma promoção da Eneba foi encontrada.");
+    }
+
+    cacheEneba = {
+        dados: {
+            loja: "Eneba",
+            moeda: "BRL",
+            atualizadoEm: new Date().toISOString(),
+            total: jogos.length,
+            jogos: jogos
+        },
+        horario: agora
+    };
+
+    return { ...cacheEneba.dados, cache: false };
+}
+
+function converterPrecoBRL(texto) {
+    if (!texto) {
+        return null;
+    }
+
+    const limpo = String(texto)
+        .replace(/&nbsp;/g, " ")
+        .replace(/R\$\s*/i, "")
+        .replace(/\./g, "")
+        .replace(",", ".")
+        .trim();
+
+    const valor = Number(limpo);
+    return Number.isFinite(valor) ? valor : null;
+}
+
+// A página de ofertas do dia só mostra o preço final e o desconto.
+// O desconto é calculado sobre o preço de tabela em EUR. O Algolia guarda
+// esse valor de tabela; multiplicamos pela taxa EUR -> BRL que vem na página.
+function extrairJogosInstantGaming(html) {
+    const blocos = html.match(/<article[\s\S]*?<\/article>/g) || [];
+    const jogos = [];
+
+    for (const bloco of blocos) {
+        const link = bloco.match(/href="(https:\/\/www\.instant-gaming\.com\/br\/(\d+)-[^"]+)"/);
+        const nome = bloco.match(/<span class="title" title="([^"]+)"/);
+        const imagem = bloco.match(/data-src="([^"]+)"/);
+        const desconto = bloco.match(/class="discount">\s*-(\d+)%/);
+        const preco = bloco.match(/R\$(?:&nbsp;|\s)*([0-9.,]+)/);
+
+        if (!link || !nome || !imagem || !desconto || !preco) {
+            continue;
+        }
+
+        const precoFinal = converterPrecoBRL(preco[1]);
+        const percentual = Number(desconto[1]);
+
+        if (!Number.isFinite(precoFinal) || precoFinal <= 0) {
+            continue;
+        }
+
+        if (!Number.isFinite(percentual) || percentual <= 0 || percentual >= 100) {
+            continue;
+        }
+
+        jogos.push({
+            id: link[2],
+            nome: decodificarEntidadesHTML(nome[1]),
+            desconto: percentual,
+            precoFinal: precoFinal,
+            moeda: "BRL",
+            imagem: decodificarEntidadesHTML(imagem[1]),
+            link: link[1].split("?")[0],
+            expiraEm: null,
+            // Caso o Algolia não responda, usamos este valor aproximado.
+            _precoOriginalCalculado: Number((precoFinal / (1 - percentual / 100)).toFixed(2))
+        });
+    }
+
+    return jogos;
+}
+
+async function completarPrecosOriginaisInstantGaming(jogos, taxaEur) {
+    const usarAlgolia = Number.isFinite(taxaEur) && taxaEur > 0;
+
+    if (!usarAlgolia || jogos.length === 0) {
+        jogos.forEach(function (jogo) {
+            jogo.precoOriginal = jogo._precoOriginalCalculado;
+            delete jogo._precoOriginalCalculado;
+        });
+        return jogos;
+    }
+
+    try {
+        const resposta = await fetch(URL_ALGOLIA_INSTANT_GAMING, {
+            method: "POST",
+            headers: {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "X-Algolia-Application-Id": APP_ID_INSTANT_GAMING,
+                "X-Algolia-API-Key": CHAVE_INSTANT_GAMING,
+                // O Algolia da Instant Gaming confere o referer.
+                "Referer": URL_REFERER_INSTANT_GAMING,
+                "Origin": "https://www.instant-gaming.com"
+            },
+            body: JSON.stringify({
+                requests: jogos.map(function (jogo) {
+                    return {
+                        indexName: "produits_br",
+                        objectID: jogo.id
+                    };
+                })
+            }),
+            signal: AbortSignal.timeout(8000)
+        });
+
+        if (!resposta.ok) {
+            throw new Error(`O Algolia respondeu com o status ${resposta.status}.`);
+        }
+
+        const dados = await resposta.json();
+        const porId = new Map();
+
+        (dados.results || []).forEach(function (hit) {
+            if (hit && hit.prod_id) {
+                porId.set(String(hit.prod_id), hit);
+            }
+        });
+
+        jogos.forEach(function (jogo) {
+            const hit = porId.get(jogo.id);
+            const retail = Number(hit?.retail);
+            const moedaRetail = hit?.retail_currency;
+            let precoOriginal = null;
+            console.log(`Promoções da Instant Gaming: http://localhost:${PORTA}/api/instant-gaming`);
+            if (moedaRetail === "BRL" && Number.isFinite(retail)) {
+                precoOriginal = retail;
+            } else if (Number.isFinite(retail) && (!moedaRetail || moedaRetail === "EUR")) {
+                precoOriginal = Number((retail * taxaEur).toFixed(2));
+            }
+
+            if (precoOriginal && precoOriginal > jogo.precoFinal) {
+                jogo.precoOriginal = Number(precoOriginal.toFixed(2));
+            } else {
+                jogo.precoOriginal = jogo._precoOriginalCalculado;
+            }
+        });
+    } catch (erro) {
+        console.error("Falha ao buscar os preços originais da Instant Gaming:", erro.message);
+
+        jogos.forEach(function (jogo) {
+            jogo.precoOriginal = jogo._precoOriginalCalculado;
+        });
+    }
+
+    jogos.forEach(function (jogo) {
+        delete jogo._precoOriginalCalculado;
+    });
+
+    return jogos;
+}
+
+async function buscarPromocoesInstantGaming() {
+    const agora = Date.now();
+
+    if (cacheInstantGaming.dados && agora - cacheInstantGaming.horario < CACHE_INSTANT_GAMING_MS) {
+        return { ...cacheInstantGaming.dados, cache: true };
+    }
+
+    const resposta = await fetch(URL_INSTANT_GAMING, {
+        headers: {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        }
+    });
+
+    if (!resposta.ok) {
+        throw new Error(`A Instant Gaming respondeu com o status ${resposta.status}.`);
+    }
+
+    const html = await resposta.text();
+    const taxaEur = Number(html.match(/window\.user\s*=\s*\{[\s\S]*?currency:\s*\{[\s\S]*?rate:\s*"([\d.]+)"/)?.[1]);
+    const jogos = extrairJogosInstantGaming(html);
+
+    if (jogos.length === 0) {
+        throw new Error("Nenhuma promoção da Instant Gaming foi encontrada na página.");
+    }
+
+    await completarPrecosOriginaisInstantGaming(jogos, taxaEur);
+
+    const selecionados = jogos.slice(0, 24);
+
+    cacheInstantGaming = {
+        dados: {
+            loja: "Instant Gaming",
+            moeda: "BRL",
+            atualizadoEm: new Date().toISOString(),
+            total: selecionados.length,
+            jogos: selecionados
+        },
+        horario: agora
+    };
+
+    return { ...cacheInstantGaming.dados, cache: false };
+}
+
 async function servirFrontend(res, caminho) {
     const arquivoRelativo = caminho === "/" ? "index.html" : caminho.replace(/^\/+/, "");
     const caminhoArquivo = path.resolve(PASTA_FRONTEND, arquivoRelativo);
@@ -365,6 +819,27 @@ const servidor = http.createServer(async function (req, res) {
             return;
         }
 
+        // Rota que busca as promoções da Nuuvem.
+        if (caminho === "/api/nuuvem") {
+            const dados = await buscarPromocoesNuuvem();
+            responderJSON(res, 200, dados);
+            return;
+        }
+
+        // Rota que busca as promoções da Eneba.
+        if (caminho === "/api/eneba") {
+            const dados = await buscarPromocoesEneba();
+            responderJSON(res, 200, dados);
+            return;
+        }
+
+        // Rota que busca as promoções da Instant Gaming.
+        if (caminho === "/api/instant-gaming") {
+            const dados = await buscarPromocoesInstantGaming();
+            responderJSON(res, 200, dados);
+            return;
+        }
+
         // Qualquer outra rota iniciada por /api responde JSON de "não encontrado".
         if (caminho.startsWith("/api/")) {
             responderJSON(res, 404, { erro: "Rota de API não encontrada." });
@@ -376,11 +851,19 @@ const servidor = http.createServer(async function (req, res) {
     } catch (erro) {
         console.error("Erro na requisição:", erro);
 
-        if (caminho === "/api/steam" || caminho === "/api/epic") {
-            const loja = caminho === "/api/steam" ? "Steam" : "Epic Games";
+        if (caminho === "/api/steam" || caminho === "/api/epic" || caminho === "/api/nuuvem" || caminho === "/api/eneba" || caminho === "/api/instant-gaming") {
+            const loja = caminho === "/api/steam"
+                ? "Steam"
+                : caminho === "/api/epic"
+                    ? "Epic Games"
+                    : caminho === "/api/nuuvem"
+                        ? "Nuuvem"
+                        : caminho === "/api/eneba"
+                            ? "Eneba"
+                            : "Instant Gaming";
 
             responderJSON(res, 502, {
-                erro: `Não foi possível buscar as promoções da ${loja} agora. Tente novamente em instantes.`,
+                erro: `Não foi possível buscar as promoções da ${loja}.`,
                 detalhe: erro.message
             });
             return;
@@ -394,4 +877,6 @@ servidor.listen(PORTA, function () {
     console.log(`PromoWeb rodando em http://localhost:${PORTA}`);
     console.log(`Rota de teste: http://localhost:${PORTA}/api/teste`);
     console.log(`Promoções da Steam: http://localhost:${PORTA}/api/steam`);
+    console.log(`Promoções da Nuuvem: http://localhost:${PORTA}/api/nuuvem`);
+    console.log(`Promoções da Eneba: http://localhost:${PORTA}/api/eneba`);
 });
