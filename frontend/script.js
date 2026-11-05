@@ -27,6 +27,27 @@ const lojas = [
         moeda: "BRL",
         lista: document.getElementById("eg-promocoes"),
         status: document.getElementById("status-epic")
+    },
+    {
+        nome: "Nuuvem",
+        rota: "nuuvem",
+        moeda: "BRL",
+        lista: document.getElementById("nuuvem-promocoes"),
+        status: document.getElementById("status-nuuvem")
+    },
+        {
+        nome: "Eneba",
+        rota: "eneba",
+        moeda: "BRL",
+        lista: document.getElementById("eneba-promocoes"),
+        status: document.getElementById("status-eneba")
+    },
+    {
+        nome: "Instant Gaming",
+        rota: "instant-gaming",
+        moeda: "BRL",
+        lista: document.getElementById("ig-promocoes"),
+        status: document.getElementById("status-instant-gaming")
     }
 ];
 
@@ -44,9 +65,29 @@ function criarCard(jogo) {
     capa.className = "card-capa";
 
     const imagem = document.createElement("img");
-    imagem.src = jogo.imagem;
     imagem.alt = `Capa de ${jogo.nome}`;
     imagem.loading = "lazy";
+
+    // Se o capsule não existir, usa o header como reserva.
+    imagem.addEventListener("error", function () {
+        if (jogo.imagemAlternativa && imagem.src !== jogo.imagemAlternativa) {
+            imagem.src = jogo.imagemAlternativa;
+        }
+    });
+
+    // Imagens muito verticais ou muito largas são cortadas demais pelo cover.
+    // Nesses casos, mostramos a imagem inteira sobre um fundo desfocado.
+    imagem.addEventListener("load", function () {
+        const proporcao = imagem.naturalWidth / imagem.naturalHeight;
+
+        if (proporcao < 1.2 || proporcao > 2.6) {
+            const urlAtual = imagem.currentSrc || imagem.src;
+            capa.style.setProperty("--capa-fundo", `url("${urlAtual}")`);
+            capa.classList.add("capa-imagem-contida");
+        }
+    });
+
+    imagem.src = jogo.imagem;
     capa.appendChild(imagem);
 
     const selo = document.createElement("span");
