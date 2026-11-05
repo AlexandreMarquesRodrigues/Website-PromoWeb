@@ -19,7 +19,7 @@ const lojas = [
     {
         nome: "Epic Games",
         rota: "epic",
-        moeda: "USD",
+        moeda: "BRL",
         lista: document.getElementById("eg-promocoes"),
         status: document.getElementById("status-epic")
     }
@@ -58,13 +58,24 @@ function criarCard(jogo) {
     const precos = document.createElement("div");
     precos.className = "precos";
 
+    // O "≈" avisa que o valor foi convertido de dólar para real.
+    const prefixo = jogo.precoAproximado ? "≈ " : "";
+
     const precoOriginal = document.createElement("span");
     precoOriginal.className = "preco-original";
-    precoOriginal.textContent = formatador.format(jogo.precoOriginal);
+    precoOriginal.textContent = prefixo + formatador.format(jogo.precoOriginal);
 
     const precoFinal = document.createElement("span");
     precoFinal.className = "preco-final";
-    precoFinal.textContent = jogo.precoFinal === 0 ? "Grátis" : formatador.format(jogo.precoFinal);
+    precoFinal.textContent = jogo.precoFinal === 0
+        ? "Grátis"
+        : prefixo + formatador.format(jogo.precoFinal);
+
+    // Ao passar o mouse, mostra o valor original em dólar.
+    if (jogo.precoOriginalUSD !== undefined && jogo.precoFinalUSD !== undefined) {
+        precoOriginal.title = formatadorDolar.format(jogo.precoOriginalUSD);
+        precoFinal.title = formatadorDolar.format(jogo.precoFinalUSD);
+    }
 
     precos.append(precoOriginal, precoFinal);
     info.append(titulo, precos);
@@ -107,7 +118,7 @@ async function carregarPromocoes(loja) {
             minute: "2-digit"
         });
 
-        const notaMoeda = dados.moeda === "USD" ? " • Preços em US$" : "";
+        const notaMoeda = dados.precoAproximado ? " • Valores aproximados em R$" : "";
         loja.status.textContent = `${dados.total} promoções${notaMoeda} • Atualizadas às ${hora}`;
     } catch (erro) {
         console.error(`Erro ao carregar promoções da ${loja.nome}:`, erro);
